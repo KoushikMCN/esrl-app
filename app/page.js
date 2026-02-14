@@ -46,7 +46,7 @@ function Hero() {
           Upload PDF
         </button>
 
-        <button className="bg-zinc-800 px-6 py-3 rounded-full font-medium hover:bg-zinc-700 transition">
+        <button className="bg-zinc-800 px-6 py-3 rounded-full font-medium hover:bg-zinc-700 transition" onClick={()=>{router.push("/how-to-use")}}>
           How it works
         </button>
       </div>

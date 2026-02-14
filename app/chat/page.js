@@ -27,6 +27,8 @@ export default function ChatPage() {
 
             const data = await response.json()
 
+            console.log(data)
+
             if (data.message === "PDF processed") {
                 toast.success("PDF processed", {
                     duration: 2000,

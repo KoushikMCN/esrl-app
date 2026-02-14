@@ -10,6 +10,7 @@ export default function DocumentPage() {
     const [showVideo, setShowVideo] = useState(false)
 
     const docId = useParams().id
+    const api_uri = process.env.NEXT_PUBLIC_API_URI
 
     const isDragging = useRef(null)
 
@@ -46,6 +47,30 @@ export default function DocumentPage() {
         }
     }, [])
 
+    useEffect(() => {
+        const fetchData = async () => {
+            try {
+                const [summaryRes, notesRes, videoRes] = await Promise.all([
+                    fetch(`${api_uri}/notes/summary/`),
+                    fetch(`${api_uri}/notes/`),
+                    fetch(`${api_uri}/generate_video/${docId}`),
+                ])
+
+                const [summaryData, notesData, videoData] = await Promise.all([summaryRes.json(), notesRes.json(), videoRes.json()])
+
+                setSummary(summaryData)
+                setNotes(notesData)
+                setVideo(videoData)
+            } catch (err) {
+                console.error("Error fetching data:", err)
+            } finally {
+                setLoading(false)
+            }
+        }
+
+        fetchData()
+    }, [])
+
     return (
         <main className="h-screen flex flex-col bg-black text-white">
             <Navbar docId={docId} />
@@ -57,7 +82,7 @@ export default function DocumentPage() {
                 </div>
 
                 {/* DRAG HANDLE */}
-                <div onMouseDown={() => startDrag("left")} className="w-px bg-zinc-900/40 cursor-col-resize hover:bg-zinc-600 transition" />
+                <div onMouseDown={() => startDrag("left")} className="w-1 bg-zinc-900/40 cursor-col-resize hover:bg-zinc-600 transition" />
 
                 {/* CHAT PANEL */}
                 <div className="flex-1 bg-black flex flex-col">
@@ -65,7 +90,7 @@ export default function DocumentPage() {
                 </div>
 
                 {/* DRAG HANDLE */}
-                <div onMouseDown={() => startDrag("right")} className="w-px bg-zinc-900/40 cursor-col-resize hover:bg-zinc-600 transition" />
+                <div onMouseDown={() => startDrag("right")} className="w-1 bg-zinc-900/40 cursor-col-resize hover:bg-zinc-600 transition" />
 
                 {/* RIGHT PANEL */}
                 <div style={{ width: `${rightWidth}%` }} className="bg-zinc-900/40 border-l border-zinc-800 p-6">
@@ -89,7 +114,7 @@ function Navbar({ docId }) {
                         Upload PDF
                     </a>
                 </div>
-                <span className=" transition text-sm text-green-600">eSRL Doc: {docId.slice(0,3) + "..." + docId.slice(-3,-1) + docId.charAt(docId.length-1)}</span>
+                <span className=" transition text-sm text-green-600">eSRL Doc: {docId.slice(0, 3) + "..." + docId.slice(-3, -1) + docId.charAt(docId.length - 1)}</span>
             </div>
         </nav>
     )
@@ -216,7 +241,7 @@ function VideoSection({ video_url, onOpen }) {
                     {/* Play Overlay */}
                     <div className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition">
                         <div className="w-14 h-14 rounded-full bg-white/90 flex items-center justify-center shadow-lg">
-                            <div className="w-0 h-0 border-l-[10px] border-l-black border-y-[6px] border-y-transparent ml-1"></div>
+                            <div className="w-0 h-0 border-l-10 border-l-black border-y-[6px] border-y-transparent ml-1"></div>
                         </div>
                     </div>
                 </div>
