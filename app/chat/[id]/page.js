@@ -3,14 +3,22 @@
 import { Send } from "lucide-react"
 import { useParams } from "next/navigation"
 import { useState, useRef, useEffect } from "react"
+import ReactMarkdown from "react-markdown"
 
 export default function DocumentPage() {
     const [leftWidth, setLeftWidth] = useState(25)
     const [rightWidth, setRightWidth] = useState(20)
     const [showVideo, setShowVideo] = useState(false)
+    const [summary, setSummary] = useState(null)
+    const [notes, setNotes] = useState(null)
+    const [video, setVideo] = useState(null)
+    const [summaryLoading, setSummaryLoading] = useState(true)
+    const [notesLoading, setNotesLoading] = useState(true)
+    const [videoLoading, setVideoLoading] = useState(true)
+    const [error, setError] = useState("")
 
     const docId = useParams().id
-    const api_uri = process.env.NEXT_PUBLIC_API_URI
+    const apiBase = process.env.NEXT_PUBLIC_API_URI || "http://127.0.0.1:8000"
 
     const isDragging = useRef(null)
 
@@ -48,28 +56,82 @@ export default function DocumentPage() {
     }, [])
 
     useEffect(() => {
+        if (!docId) return
+
         const fetchData = async () => {
-            try {
-                const [summaryRes, notesRes, videoRes] = await Promise.all([
-                    fetch(`${api_uri}/notes/summary/`),
-                    fetch(`${api_uri}/notes/`),
-                    fetch(`${api_uri}/generate_video/${docId}`),
-                ])
+            setError("")
+            setSummaryLoading(true)
+            setNotesLoading(true)
+            setVideoLoading(true)
 
-                const [summaryData, notesData, videoData] = await Promise.all([summaryRes.json(), notesRes.json(), videoRes.json()])
+            const summaryPromise = fetch(`${apiBase}/notes/summary`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({}),
+            })
+                .then((res) => {
+                    if (!res.ok) throw new Error("Summary request failed")
+                    return res.json()
+                })
+                .then((data) => {
+                    setSummary(data)
+                })
+                .catch((err) => {
+                    console.error("Summary request failed:", err)
+                    setError("Could not load document insights. Please try again.")
+                })
+                .finally(() => {
+                    setSummaryLoading(false)
+                })
 
-                setSummary(summaryData)
-                setNotes(notesData)
-                setVideo(videoData)
-            } catch (err) {
-                console.error("Error fetching data:", err)
-            } finally {
-                setLoading(false)
-            }
+            const notesPromise = fetch(`${apiBase}/notes`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({}),
+            })
+                .then((res) => {
+                    if (!res.ok) throw new Error("Notes request failed")
+                    return res.json()
+                })
+                .then((data) => {
+                    setNotes(data)
+                })
+                .catch((err) => {
+                    console.error("Notes request failed:", err)
+                    setError("Could not load document insights. Please try again.")
+                })
+                .finally(() => {
+                    setNotesLoading(false)
+                })
+
+            const videoPromise = fetch(`${apiBase}/generate_video/${docId}`, {
+                method: "POST",
+            })
+                .then((res) => {
+                    if (!res.ok) throw new Error("Video request failed")
+                    return res.json()
+                })
+                .then((data) => {
+                    setVideo(data)
+                })
+                .catch((err) => {
+                    console.error("Video request failed:", err)
+                })
+                .finally(() => {
+                    setVideoLoading(false)
+                })
+
+            await Promise.allSettled([summaryPromise, notesPromise, videoPromise])
         }
 
         fetchData()
-    }, [])
+    }, [apiBase, docId])
+
+    const videoUrl = buildMediaUrl(video?.video_path, apiBase)
 
     return (
         <main className="h-screen flex flex-col bg-black text-white">
@@ -78,7 +140,13 @@ export default function DocumentPage() {
             <div className="flex-1 flex overflow-hidden">
                 {/* LEFT PANEL */}
                 <div style={{ width: `${leftWidth}%` }} className="bg-zinc-900/40 border-r border-zinc-800 flex flex-col">
-                    <LeftPanel />
+                    <LeftPanel
+                        summary={summary}
+                        notes={notes}
+                        summaryLoading={summaryLoading}
+                        notesLoading={notesLoading}
+                        error={error}
+                    />
                 </div>
 
                 {/* DRAG HANDLE */}
@@ -86,7 +154,7 @@ export default function DocumentPage() {
 
                 {/* CHAT PANEL */}
                 <div className="flex-1 bg-black flex flex-col">
-                    <ChatPanel />
+                    <ChatPanel apiBase={apiBase} />
                 </div>
 
                 {/* DRAG HANDLE */}
@@ -94,13 +162,22 @@ export default function DocumentPage() {
 
                 {/* RIGHT PANEL */}
                 <div style={{ width: `${rightWidth}%` }} className="bg-zinc-900/40 border-l border-zinc-800 p-6">
-                    <VideoSection video_url={"https://www.w3schools.com/html/mov_bbb.mp4"} onOpen={() => setShowVideo(true)} />
+                    <VideoSection video_url={videoUrl} loading={videoLoading} onOpen={() => setShowVideo(true)} />
                 </div>
             </div>
 
-            {showVideo && <VideoModal video_url={"https://www.w3schools.com/html/mov_bbb.mp4"} onClose={() => setShowVideo(false)} />}
+            {showVideo && <VideoModal video_url={videoUrl} onClose={() => setShowVideo(false)} />}
         </main>
     )
+}
+
+function buildMediaUrl(path, apiBase) {
+    if (!path) return ""
+    if (path.startsWith("http://") || path.startsWith("https://")) return path
+
+    const normalizedBase = apiBase.endsWith("/") ? apiBase.slice(0, -1) : apiBase
+    const normalizedPath = path.startsWith("/") ? path : `/${path}`
+    return `${normalizedBase}${normalizedPath}`
 }
 
 function Navbar({ docId }) {
@@ -120,31 +197,236 @@ function Navbar({ docId }) {
     )
 }
 
-function LeftPanel() {
+function LeftPanel({ summary, notes, summaryLoading, notesLoading, error }) {
     const [summaryOpen, setSummaryOpen] = useState(true)
     const [notesOpen, setNotesOpen] = useState(true)
+    const [showNotesOverlay, setShowNotesOverlay] = useState(false)
+    const [showFlashcardAnswers, setShowFlashcardAnswers] = useState(true)
+    const [showMcqAnswers, setShowMcqAnswers] = useState(true)
+
+    const renderMarkdown = (text) => (
+        <div className="prose prose-invert max-w-none text-sm">
+            <ReactMarkdown
+                components={{
+                    h1: ({ children }) => <h1 className="text-xl font-semibold text-white">{children}</h1>,
+                    h2: ({ children }) => <h2 className="text-lg font-semibold text-white">{children}</h2>,
+                    h3: ({ children }) => <h3 className="text-base font-semibold text-white">{children}</h3>,
+                    p: ({ children }) => <p className="text-sm text-zinc-200 leading-relaxed">{children}</p>,
+                    ul: ({ children }) => <ul className="list-disc pl-5 text-sm text-zinc-200 space-y-1">{children}</ul>,
+                    ol: ({ children }) => <ol className="list-decimal pl-5 text-sm text-zinc-200 space-y-1">{children}</ol>,
+                    li: ({ children }) => <li>{children}</li>,
+                    strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+                    em: ({ children }) => <em className="text-zinc-200 italic">{children}</em>,
+                    a: ({ children, href }) => (
+                        <a href={href} className="text-blue-300 hover:text-blue-200 underline" target="_blank" rel="noreferrer">
+                            {children}
+                        </a>
+                    ),
+                    blockquote: ({ children }) => (
+                        <blockquote className="border-l-2 border-zinc-600 pl-3 text-zinc-300 italic">{children}</blockquote>
+                    ),
+                    code: ({ children }) => (
+                        <code className="rounded bg-zinc-900 px-1 py-0.5 text-xs text-zinc-200">{children}</code>
+                    ),
+                }}
+            >
+                {text}
+            </ReactMarkdown>
+        </div>
+    )
+
+    const parsePossibleJson = (text) => {
+        const trimmed = text.trim()
+        const jsonBlockMatch = trimmed.match(/^```json\s*([\s\S]*?)\s*```$/i)
+        const jsonString = jsonBlockMatch ? jsonBlockMatch[1] : trimmed
+
+        if (!jsonString.startsWith("{") || !jsonString.endsWith("}")) {
+            return null
+        }
+
+        try {
+            return JSON.parse(jsonString)
+        } catch (err) {
+            return null
+        }
+    }
+
+    const renderNotesObject = (value, options = {}) => {
+        const {
+            showFlashcardAnswers: showFlashcards = true,
+            showMcqAnswers: showAnswers = true,
+        } = options
+        const sections = []
+
+        if (Array.isArray(value.flashcards) && value.flashcards.length > 0) {
+            sections.push(
+                <div key="flashcards">
+                    <h4 className="text-sm font-semibold text-white mb-2">Flashcards</h4>
+                    <div className="space-y-3">
+                        {value.flashcards.map((card, index) => (
+                            <div key={`flashcard-${index}`} className="rounded-lg border border-zinc-800 bg-black/30 p-3">
+                                <p className="text-xs text-zinc-400">Q{index + 1}</p>
+                                <p className="text-sm text-zinc-100 mt-1">{card.question}</p>
+                                {showFlashcards ? (
+                                    <>
+                                        <p className="text-xs text-zinc-400 mt-2">Answer</p>
+                                        <p className="text-sm text-zinc-200 mt-1">{card.answer}</p>
+                                    </>
+                                ) : (
+                                    <p className="text-xs text-zinc-500 mt-2">Answer hidden</p>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )
+        }
+
+        if (typeof value.cheat_sheet === "string" && value.cheat_sheet.trim()) {
+            sections.push(
+                <div key="cheat_sheet">
+                    <h4 className="text-sm font-semibold text-white mb-2">Cheat Sheet</h4>
+                    {renderMarkdown(value.cheat_sheet)}
+                </div>
+            )
+        }
+
+        if (Array.isArray(value.mcqs) && value.mcqs.length > 0) {
+            sections.push(
+                <div key="mcqs">
+                    <h4 className="text-sm font-semibold text-white mb-2">MCQs</h4>
+                    <div className="space-y-3">
+                        {value.mcqs.map((mcq, index) => (
+                            <div key={`mcq-${index}`} className="rounded-lg border border-zinc-800 bg-black/30 p-3">
+                                <p className="text-xs text-zinc-400">Q{index + 1}</p>
+                                <p className="text-sm text-zinc-100 mt-1">{mcq.question}</p>
+                                {Array.isArray(mcq.options) && mcq.options.length > 0 && (
+                                    <ul className="mt-2 text-sm text-zinc-200 space-y-1">
+                                        {mcq.options.map((option, optionIndex) => (
+                                            <li key={`mcq-${index}-opt-${optionIndex}`}>{option}</li>
+                                        ))}
+                                    </ul>
+                                )}
+                                {showAnswers && mcq.answer && (
+                                    <p className="text-xs text-zinc-400 mt-2">Answer: {mcq.answer}</p>
+                                )}
+                                {!showAnswers && <p className="text-xs text-zinc-500 mt-2">Answer hidden</p>}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )
+        }
+
+        if (Array.isArray(value.interview_questions) && value.interview_questions.length > 0) {
+            sections.push(
+                <div key="interview_questions">
+                    <h4 className="text-sm font-semibold text-white mb-2">Interview Questions</h4>
+                    <ul className="list-disc pl-5 text-sm text-zinc-200 space-y-1">
+                        {value.interview_questions.map((question, index) => (
+                            <li key={`interview-${index}`}>{question}</li>
+                        ))}
+                    </ul>
+                </div>
+            )
+        }
+
+        if (sections.length > 0) {
+            return <div className="space-y-4">{sections}</div>
+        }
+
+        return null
+    }
+
+    const renderContent = (value) => {
+        if (value === null || value === undefined) return null
+
+        if (typeof value === "string") {
+            const parsed = parsePossibleJson(value)
+            if (parsed) return renderContent(parsed)
+            return renderMarkdown(value)
+        }
+
+        if (Array.isArray(value)) {
+            return (
+                <ul className="text-zinc-300 text-sm space-y-2">
+                    {value.map((item, index) => (
+                        <li key={`${index}-${JSON.stringify(item).slice(0, 8)}`}>• {typeof item === "string" ? item : JSON.stringify(item)}</li>
+                    ))}
+                </ul>
+            )
+        }
+
+        if (typeof value === "object") {
+            const notesView = renderNotesObject(value)
+            if (notesView) return notesView
+
+            if (typeof value.summary === "string") {
+                return renderMarkdown(value.summary)
+            }
+
+            if (typeof value.notes === "string") {
+                const parsedNotes = parsePossibleJson(value.notes)
+                if (parsedNotes) {
+                    const parsedView = renderNotesObject(parsedNotes)
+                    if (parsedView) return parsedView
+                }
+                return renderMarkdown(value.notes)
+            }
+
+            return <pre className="text-zinc-300 text-xs leading-relaxed whitespace-pre-wrap">{JSON.stringify(value, null, 2)}</pre>
+        }
+
+        return <p className="text-zinc-300 text-sm leading-relaxed">{String(value)}</p>
+    }
 
     return (
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
             <Collapsible title="Summary" open={summaryOpen} setOpen={setSummaryOpen}>
-                <p className="text-zinc-300 text-sm leading-relaxed">This document explains digital forensics, evidence preservation, and investigative workflows.</p>
+                {summaryLoading && <p className="text-zinc-400 text-sm">Loading summary...</p>}
+                {!summaryLoading && error && <p className="text-red-400 text-sm">{error}</p>}
+                {!summaryLoading && !error && renderContent(summary)}
             </Collapsible>
 
-            <Collapsible title="Quick Notes" open={notesOpen} setOpen={setNotesOpen}>
-                <ul className="text-zinc-300 text-sm space-y-2">
-                    <li>• Chain of custody</li>
-                    <li>• Evidence integrity</li>
-                    <li>• Forensic imaging</li>
-                </ul>
+            <Collapsible
+                title="Quick Notes"
+                open={notesOpen}
+                setOpen={setNotesOpen}
+                onHeaderClick={() => setShowNotesOverlay(true)}
+            >
+                {notesLoading && <p className="text-zinc-400 text-sm">Loading notes...</p>}
+                {!notesLoading && error && <p className="text-red-400 text-sm">{error}</p>}
+                {!notesLoading && !error && (
+                    <button
+                        onClick={() => setShowNotesOverlay(true)}
+                        className="mt-2 text-xs bg-zinc-800 text-zinc-200 px-3 py-2 rounded-md hover:bg-zinc-700 transition"
+                    >
+                        Open Quick Notes
+                    </button>
+                )}
             </Collapsible>
+
+            <QuickNotesOverlay
+                isOpen={showNotesOverlay}
+                onClose={() => setShowNotesOverlay(false)}
+                notes={notes}
+                renderNotesObject={renderNotesObject}
+                showFlashcardAnswers={showFlashcardAnswers}
+                setShowFlashcardAnswers={setShowFlashcardAnswers}
+                showMcqAnswers={showMcqAnswers}
+                setShowMcqAnswers={setShowMcqAnswers}
+            />
         </div>
     )
 }
 
-function Collapsible({ title, open, setOpen, children }) {
+function Collapsible({ title, open, setOpen, children, onHeaderClick }) {
     return (
         <div className="bg-zinc-800/40 border border-zinc-700 rounded-xl">
-            <div onClick={() => setOpen(!open)} className="flex justify-between items-center px-4 py-3 cursor-pointer">
+            <div
+                onClick={onHeaderClick || (() => setOpen(!open))}
+                className="flex justify-between items-center px-4 py-3 cursor-pointer"
+            >
                 <h3 className="text-xs uppercase tracking-wider text-zinc-400">{title}</h3>
                 <span className="text-zinc-500 text-sm">{open ? "−" : "+"}</span>
             </div>
@@ -154,8 +436,77 @@ function Collapsible({ title, open, setOpen, children }) {
     )
 }
 
-function ChatPanel() {
-    const [messages, setMessages] = useState([{ role: "assistant", text: "Ask me anything about this document." }])
+function QuickNotesOverlay({
+    isOpen,
+    onClose,
+    notes,
+    renderNotesObject,
+    showFlashcardAnswers,
+    setShowFlashcardAnswers,
+    showMcqAnswers,
+    setShowMcqAnswers,
+}) {
+    if (!isOpen) return null
+
+    const normalizedNotes = (() => {
+        if (!notes) return null
+        if (notes.notes && typeof notes.notes === "string") {
+            const trimmed = notes.notes.trim()
+            const jsonBlockMatch = trimmed.match(/^```json\s*([\s\S]*?)\s*```$/i)
+            const jsonString = jsonBlockMatch ? jsonBlockMatch[1] : trimmed
+
+            if (jsonString.startsWith("{") && jsonString.endsWith("}")) {
+                try {
+                    return JSON.parse(jsonString)
+                } catch (err) {
+                    return notes
+                }
+            }
+        }
+
+        return notes
+    })()
+
+    return (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center">
+            <div className="w-11/12 max-w-4xl max-h-[85vh] overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl">
+                <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
+                    <div>
+                        <h3 className="text-lg font-semibold text-white">Quick Notes</h3>
+                        <p className="text-xs text-zinc-400">Toggle sections and answers while you study.</p>
+                    </div>
+                    <button onClick={onClose} className="text-zinc-300 hover:text-white transition">✕</button>
+                </div>
+
+                <div className="flex flex-wrap gap-3 px-6 py-4 border-b border-zinc-800 text-xs text-zinc-300">
+                    <button
+                        onClick={() => setShowFlashcardAnswers((prev) => !prev)}
+                        className="rounded-full border border-zinc-700 px-3 py-1 hover:border-zinc-500 transition"
+                    >
+                        {showFlashcardAnswers ? "Hide" : "Show"} flashcard answers
+                    </button>
+                    <button
+                        onClick={() => setShowMcqAnswers((prev) => !prev)}
+                        className="rounded-full border border-zinc-700 px-3 py-1 hover:border-zinc-500 transition"
+                    >
+                        {showMcqAnswers ? "Hide" : "Show"} MCQ answers
+                    </button>
+                </div>
+
+                <div className="p-6 overflow-y-auto max-h-[70vh]">
+                    {renderNotesObject(normalizedNotes, {
+                        showFlashcardAnswers,
+                        showMcqAnswers,
+                    }) || <p className="text-sm text-zinc-400">No quick notes available.</p>}
+                </div>
+            </div>
+        </div>
+    )
+}
+
+function ChatPanel({ apiBase }) {
+    const [messages, setMessages] = useState([{ role: "assistant", content: "Ask me anything about this document." }])
+    const [sending, setSending] = useState(false)
 
     const bottomRef = useRef()
 
@@ -168,7 +519,7 @@ function ChatPanel() {
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
                 {messages.map((msg, i) => (
                     <ChatBubble key={i} side={msg.role === "user" ? "right" : "left"}>
-                        {msg.text}
+                        {msg.role === "assistant" ? <AssistantMessage content={msg.content} images={msg.images} /> : msg.content}
                     </ChatBubble>
                 ))}
 
@@ -176,8 +527,40 @@ function ChatPanel() {
             </div>
 
             <ChatInput
-                onSend={(text) => {
-                    setMessages([...messages, { role: "user", text }])
+                sending={sending}
+                onSend={async (text) => {
+                    if (!text.trim() || sending) return
+
+                    const updatedMessages = [...messages, { role: "user", content: text }]
+                    setMessages(updatedMessages)
+                    setSending(true)
+
+                    try {
+                        const response = await fetch(`${apiBase}/chat`, {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json",
+                            },
+                            body: JSON.stringify({ messages: updatedMessages }),
+                        })
+
+                        const data = await response.json()
+                        const answer = response.ok && data?.answer ? data.answer : "Sorry, I could not get a response."
+
+                        const images = Array.isArray(data?.images)
+                            ? data.images.map((image) => ({
+                                  ...image,
+                                  url: buildMediaUrl(image.url || image.path, apiBase),
+                              }))
+                            : []
+
+                        setMessages([...updatedMessages, { role: "assistant", content: answer, images }])
+                    } catch (err) {
+                        console.error("Chat request failed:", err)
+                        setMessages([...updatedMessages, { role: "assistant", content: "Sorry, something went wrong." }])
+                    } finally {
+                        setSending(false)
+                    }
                 }}
             />
         </>
@@ -199,7 +582,56 @@ function ChatBubble({ children, side }) {
     )
 }
 
-function ChatInput({ onSend }) {
+function AssistantMessage({ content, images }) {
+    return (
+        <div className="space-y-4">
+            <div className="prose prose-invert max-w-none text-sm">
+                <ReactMarkdown
+                    components={{
+                        h1: ({ children }) => <h1 className="text-xl font-semibold text-white">{children}</h1>,
+                        h2: ({ children }) => <h2 className="text-lg font-semibold text-white">{children}</h2>,
+                        h3: ({ children }) => <h3 className="text-base font-semibold text-white">{children}</h3>,
+                        p: ({ children }) => <p className="text-sm text-zinc-200 leading-relaxed">{children}</p>,
+                        ul: ({ children }) => <ul className="list-disc pl-5 text-sm text-zinc-200 space-y-1">{children}</ul>,
+                        ol: ({ children }) => <ol className="list-decimal pl-5 text-sm text-zinc-200 space-y-1">{children}</ol>,
+                        li: ({ children }) => <li>{children}</li>,
+                        strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+                        em: ({ children }) => <em className="text-zinc-200 italic">{children}</em>,
+                        a: ({ children, href }) => (
+                            <a href={href} className="text-blue-300 hover:text-blue-200 underline" target="_blank" rel="noreferrer">
+                                {children}
+                            </a>
+                        ),
+                        blockquote: ({ children }) => (
+                            <blockquote className="border-l-2 border-zinc-600 pl-3 text-zinc-300 italic">{children}</blockquote>
+                        ),
+                        code: ({ children }) => (
+                            <code className="rounded bg-zinc-900 px-1 py-0.5 text-xs text-zinc-200">{children}</code>
+                        ),
+                    }}
+                >
+                    {content}
+                </ReactMarkdown>
+            </div>
+
+            {Array.isArray(images) && images.length > 0 && (
+                <div className="grid gap-3">
+                    {images.map((image, index) => (
+                        <div key={`${image.url}-${index}`} className="rounded-lg border border-zinc-700 bg-black/40 p-3">
+                            {image.url && (
+                                <img src={image.url} alt={image.caption || "Document image"} className="w-full rounded-md" />
+                            )}
+                            {image.caption && <p className="mt-2 text-xs text-zinc-300">{image.caption}</p>}
+                            {image.context && <p className="mt-1 text-xs text-zinc-500">{image.context}</p>}
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    )
+}
+
+function ChatInput({ onSend, sending }) {
     const [input, setInput] = useState("")
 
     const send = () => {
@@ -219,7 +651,11 @@ function ChatInput({ onSend }) {
                     className="flex-1 bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-600"
                 />
 
-                <button onClick={send} className="bg-zinc-800 text-zinc-200 px-4 py-3 rounded-xl text-sm font-medium hover:opacity-90 transition">
+                <button
+                    onClick={send}
+                    className="bg-zinc-800 text-zinc-200 px-4 py-3 rounded-xl text-sm font-medium hover:opacity-90 transition disabled:opacity-50"
+                    disabled={sending}
+                >
                     <Send />
                 </button>
             </div>
@@ -227,7 +663,7 @@ function ChatInput({ onSend }) {
     )
 }
 
-function VideoSection({ video_url, onOpen }) {
+function VideoSection({ video_url, loading, onOpen }) {
     return (
         <div className="h-full flex flex-col justify-between">
             {/* Header */}
@@ -235,8 +671,17 @@ function VideoSection({ video_url, onOpen }) {
                 <h3 className="text-xs uppercase tracking-wider text-zinc-400 mb-4">Generated Video</h3>
 
                 {/* Video Preview Card */}
-                <div onClick={onOpen} className="relative rounded-xl overflow-hidden border border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800/60 transition cursor-pointer group">
-                    <video src={video_url} className="w-full h-48 object-cover opacity-80 group-hover:opacity-100 transition" />
+                <div
+                    onClick={video_url ? onOpen : undefined}
+                    className={`relative rounded-xl overflow-hidden border border-zinc-800 transition ${video_url ? "bg-zinc-900/50 hover:bg-zinc-800/60 cursor-pointer group" : "bg-zinc-900/30"}`}
+                >
+                    {video_url ? (
+                        <video src={video_url} className="w-full h-48 object-cover opacity-80 group-hover:opacity-100 transition" />
+                    ) : (
+                        <div className="w-full h-48 flex items-center justify-center text-xs text-zinc-500">
+                            {loading ? "Generating video..." : "Video not available"}
+                        </div>
+                    )}
 
                     {/* Play Overlay */}
                     <div className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition">
@@ -251,7 +696,11 @@ function VideoSection({ video_url, onOpen }) {
             </div>
 
             {/* Fullscreen Button */}
-            <button onClick={onOpen} className="mt-6 text-sm bg-zinc-800 text-white py-2 border border-zinc-700 focus:border-zinc-200 rounded-lg hover:opacity-90 transition">
+            <button
+                onClick={onOpen}
+                disabled={!video_url}
+                className="mt-6 text-sm bg-zinc-800 text-white py-2 border border-zinc-700 focus:border-zinc-200 rounded-lg hover:opacity-90 transition disabled:opacity-50"
+            >
                 Play Video
             </button>
         </div>
@@ -259,6 +708,8 @@ function VideoSection({ video_url, onOpen }) {
 }
 
 function VideoModal({ video_url, onClose }) {
+    if (!video_url) return null
+
     return (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
             <div className="relative w-4/5 max-w-4xl bg-black rounded-2xl overflow-hidden shadow-2xl">
